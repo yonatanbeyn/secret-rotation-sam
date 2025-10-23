@@ -14,6 +14,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.UUID;
 
 
 public class RotateSecretHandler implements RequestHandler<Map<String, Object>, String> {
@@ -30,7 +31,11 @@ public class RotateSecretHandler implements RequestHandler<Map<String, Object>, 
 
         switch (step) {
             case "createSecret":
-                return createSecret(secretId, token, context);
+                try {
+                    return createSecret(secretId, token, context);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
             case "setSecret":
                 return setSecret(secretId, token, context);
             case "testSecret":
@@ -42,89 +47,111 @@ public class RotateSecretHandler implements RequestHandler<Map<String, Object>, 
         }
     }
 
-    // ===================== STEP 1: CREATE SECRET =====================
-    private String createSecret(String secretId, String token, Context context) {
-        try {
-            DescribeSecretResponse describe = client.describeSecret(
-                    DescribeSecretRequest.builder().secretId(secretId).build());
+    private String createSecret(String secretId, String token, Context context) throws Exception {
+        DescribeSecretResponse describe = client.describeSecret(
+                DescribeSecretRequest.builder().secretId(secretId).build());
 
-            // 1️⃣ Check if pending version already exists
-            if (describe.versionIdsToStages().containsKey(token)) {
-                context.getLogger().log("Pending version exists, validating...\n");
-
+        // ✅ Case 1: Pending version already registered in metadata
+        if (describe.versionIdsToStages().containsKey(token)) {
+            context.getLogger().log("Pending version metadata found, validating...\n");
+            try {
+                // Try to fetch the AWSPENDING secret value
                 GetSecretValueResponse pending = client.getSecretValue(
                         GetSecretValueRequest.builder()
                                 .secretId(secretId)
                                 .versionId(token)
                                 .versionStage("AWSPENDING")
                                 .build());
-
                 String pendingSecret = pending.secretString();
 
-                // Validate pending secret with external system
+                // Validate it
                 if (testSecretWithExternalSystem(pendingSecret, context)) {
                     context.getLogger().log("AWSPENDING secret is valid, skipping creation\n");
                     return "Pending secret valid, nothing to do";
                 } else {
-                    context.getLogger().log("AWSPENDING secret invalid, regenerating\n");
-                    String newSecret = fetchNewSecretFromExternalSystem(pendingSecret, context);
-                    client.putSecretValue(PutSecretValueRequest.builder()
-                            .secretId(secretId)
-                            .clientRequestToken(token)
-                            .secretString(newSecret)
-                            .versionStages("AWSPENDING")
-                            .build());
-                    return "Replaced invalid pending secret";
+                    context.getLogger().log("AWSPENDING secret invalid, regenerating...\n");
                 }
+            } catch (ResourceNotFoundException rnfe) {
+                // AWS created metadata but no value yet
+                context.getLogger().log("AWSPENDING has no value yet — will generate new secret\n");
             }
-
-            // 2️⃣ Fetch current secret
-            GetSecretValueResponse current = client.getSecretValue(
-                    GetSecretValueRequest.builder()
-                            .secretId(secretId)
-                            .versionStage("AWSCURRENT")
-                            .build());
-            String currentSecret = current.secretString();
-            context.getLogger().log("Current secret = " + currentSecret + "\n");
-
-            // 3️⃣ Get new secret from external system
-            String newSecret = fetchNewSecretFromExternalSystem(currentSecret, context);
-
-            // 4️⃣ Store as AWSPENDING
-            client.putSecretValue(PutSecretValueRequest.builder()
-                    .secretId(secretId)
-                    .clientRequestToken(token)
-                    .secretString(newSecret)
-                    .versionStages("AWSPENDING")
-                    .build());
-
-            context.getLogger().log("Created new pending secret: " + newSecret + "\n");
-            return "Created new secret version";
-
-        } catch (Exception e) {
-            context.getLogger().log("Error in createSecret: " + e.getMessage() + "\n");
-            throw new RuntimeException(e);
         }
+
+        // ✅ Case 2: Either no pending version OR no value for pending
+        GetSecretValueResponse current = client.getSecretValue(
+                GetSecretValueRequest.builder()
+                        .secretId(secretId)
+                        .versionStage("AWSCURRENT")
+                        .build());
+        String currentSecret = current.secretString();
+
+        String newSecret = fetchNewSecretFromExternalSystem(currentSecret, context);
+        context.getLogger().log("Generated new pending secret: " + newSecret + "\n");
+
+        client.putSecretValue(PutSecretValueRequest.builder()
+                .secretId(secretId)
+                .clientRequestToken(token)
+                .secretString(newSecret)
+                .versionStages("AWSPENDING")
+                .build());
+
+        context.getLogger().log("Created new pending secret version.\n");
+        return "Created or replaced pending secret version";
     }
+
+
+
+//            // 2️⃣ Fetch current secret
+//            GetSecretValueResponse current = client.getSecretValue(
+//                    GetSecretValueRequest.builder()
+//                            .secretId(secretId)
+//                            .versionStage("AWSCURRENT")
+//                            .build());
+//            String currentSecret = current.secretString();
+//            context.getLogger().log("Current secret = " + currentSecret + "\n");
+//
+//            // 3️⃣ Get new secret from external system
+//            String newSecret = fetchNewSecretFromExternalSystem(currentSecret, context);
+//
+//            // 4️⃣ Store as AWSPENDING
+//            client.putSecretValue(PutSecretValueRequest.builder()
+//                    .secretId(secretId)
+//                    .clientRequestToken(token)
+//                    .secretString(newSecret)
+//                    .versionStages("AWSPENDING")
+//                    .build());
+
 
     // Example: call external API to generate new secret
     private String fetchNewSecretFromExternalSystem(String currentSecret, Context context) throws Exception {
-        HttpClient httpClient = HttpClient.newHttpClient();
-        HttpRequest req = HttpRequest.newBuilder()
-                .uri(new URI("https://your-external-service.example.com/get-new-secret"))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + currentSecret)
-                .GET()
-                .build();
-
-        HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-        if (resp.statusCode() != 200) {
-            throw new RuntimeException("External service returned " + resp.statusCode());
-        }
-
-        context.getLogger().log("External service returned new secret\n");
-        return resp.body();
+        //       HttpClient httpClient = HttpClient.newHttpClient();
+//        HttpRequest req = HttpRequest.newBuilder()
+//                .uri(new URI("https://your-external-service.example.com/get-new-secret"))
+//                .header("Content-Type", "application/json")
+//                .header("Authorization", "Bearer " + currentSecret)
+//                .GET()
+//                .build();
+//
+//        HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+//        if (resp.statusCode() != 200) {
+//            throw new RuntimeException("External service returned " + resp.statusCode());
+//        }
+//
+//        context.getLogger().log("External service returned new secret\n");
+//        return resp.body();
         // Assume JSON like {"username":"..","password":".."}
+        String newPassword = UUID.randomUUID().toString().substring(0, 16);
+
+        // Simulate JSON response like an external API would return
+        String newSecretJson = String.format("""
+        {
+            "username": "admin",
+            "password": "%s"
+        }
+        """, newPassword);
+
+        context.getLogger().log("Simulated external API returned new secret: " + newSecretJson + "\n");
+        return newSecretJson;
     }
 
     // Example: validate pending secret

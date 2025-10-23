@@ -5,7 +5,7 @@ Description: Lambda-based Secrets Manager rotation (supports demo and production
 Globals:
   Function:
     Timeout: 60
-    Runtime: java11
+    Runtime: java17
 
 Parameters:
   CreateDemoSecret:
