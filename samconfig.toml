@@ -1,0 +1,10 @@
+version = 0.1
+[default.deploy.parameters]
+stack_name = "lambda-secret-rotation"
+resolve_s3 = true
+s3_prefix = "lambda-secret-rotation"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "CreateDemoSecret=\"false\" ExistingSecretArn=\"arn:aws:secretsmanager:us-east-1:724921138194:secret:my-openapi-1VvWts\""
+image_repositories = []

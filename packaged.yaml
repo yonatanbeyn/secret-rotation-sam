@@ -1,0 +1,90 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda-based Secrets Manager rotation (supports demo and production)
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: java11
+Parameters:
+  CreateDemoSecret:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'true'
+    - 'false'
+    Description: Set to true to create a demo secret; false to use an existing one
+  ExistingSecretArn:
+    Type: String
+    Default: ''
+    Description: ARN of an existing secret to rotate (ignored if CreateDemoSecret=true)
+Resources:
+  RotationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: com.example.rotation.RotateSecretHandler::handleRequest
+      CodeUri: s3://29802191-bd1a-4515-88eb-c862d3e84216/ecac3dd09a21a89282c10d38ec019d86
+      MemorySize: 512
+      Timeout: 60
+      Policies:
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - secretsmanager:GetSecretValue
+          - secretsmanager:PutSecretValue
+          - secretsmanager:DescribeSecret
+          - secretsmanager:ListSecretVersionIds
+          - secretsmanager:UpdateSecretVersionStage
+          Resource: '*'
+        - Effect: Allow
+          Action:
+          - kms:Decrypt
+          - kms:GenerateDataKey
+          Resource: '*'
+      Environment:
+        Variables:
+          SECRET_ARN:
+            Fn::If:
+            - CreateDemoSecretIsTrue
+            - Ref: DemoSecret
+            - Ref: ExistingSecretArn
+    Metadata:
+      SamResourceId: RotationFunction
+  RotationInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - RotationFunction
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: secretsmanager.amazonaws.com
+    Metadata:
+      SamResourceId: RotationInvokePermission
+  DemoSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: CreateDemoSecretIsTrue
+    Properties:
+      Name: MyRotatingSecret
+      Description: Demo secret to rotate (created only if CreateDemoSecret=true)
+      SecretString: '{"username":"admin","password":"InitialPwd123!"}'
+    Metadata:
+      SamResourceId: DemoSecret
+  SecretRotationSchedule:
+    Type: AWS::SecretsManager::RotationSchedule
+    Properties:
+      SecretId:
+        Ref: ExistingSecretArn
+      RotationLambdaARN:
+        Fn::GetAtt:
+        - RotationFunction
+        - Arn
+      RotationRules:
+        AutomaticallyAfterDays: 30
+    Metadata:
+      SamResourceId: SecretRotationSchedule
+Conditions:
+  CreateDemoSecretIsTrue:
+    Fn::Equals:
+    - Ref: CreateDemoSecret
+    - 'true'
