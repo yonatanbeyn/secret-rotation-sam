@@ -22,7 +22,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: com.example.rotation.RotateSecretHandler::handleRequest
-      CodeUri: s3://29802191-bd1a-4515-88eb-c862d3e84216/ecac3dd09a21a89282c10d38ec019d86
+      CodeUri: xxxx
       MemorySize: 512
       Timeout: 60
       Policies:
