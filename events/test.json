@@ -1,5 +1,5 @@
 {
-  "SecretId": "arn:aws:secretsmanager:us-east-1:724921138194:secret:my-openapi-1VvWts",
+  "SecretId": "arn:aws:secretsmanager:us-east-1::secret:my-openapi-1VvWts",
   "ClientRequestToken": "example",
   "Step": "createSecret"
 }
